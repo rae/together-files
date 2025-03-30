@@ -155,7 +155,7 @@ public class FileProviderService: FileProviderServiceProtocol {
                     provider.setError(error)
                 }
             } else {
-                provider.updateStatus(.unavailable)
+                provider.updateStatus(.unknown)
             }
             
             providers.append(provider)
@@ -198,7 +198,7 @@ public class FileProviderService: FileProviderServiceProtocol {
                     id: url.path,
                     name: url.lastPathComponent,
                     url: url,
-                    size: resourceValues.fileSize as? Int64,
+                    size: Int64(resourceValues.fileSize ?? 0),
                     modificationDate: resourceValues.contentModificationDate,
                     creationDate: resourceValues.creationDate,
                     isDirectory: isDirectory,
@@ -221,44 +221,52 @@ public class FileProviderService: FileProviderServiceProtocol {
             throw FileProviderError.providerUnavailable
         }
         
-        // Determine the parent item identifier
-        let parentItemIdentifier: NSFileProviderItemIdentifier
+        // For file providers, we'll use a different approach that works with FileProvider APIs
+        // Get the root URL or the directory URL
+        let directoryURL: URL
         if let directory = directory, let providerItemID = directory.providerItemIdentifier {
-            parentItemIdentifier = NSFileProviderItemIdentifier(providerItemID)
+            // Convert the item identifier to a URL
+            let itemIdentifier = NSFileProviderItemIdentifier(providerItemID)
+            directoryURL = try await manager.getUserVisibleURL(for: itemIdentifier)
         } else {
-            parentItemIdentifier = .rootContainer
+            // Use the root container
+            directoryURL = try await manager.getUserVisibleURL(for: .rootContainer)
         }
         
-        // Create an enumerator for the parent item
-        let enumerator = try await manager.enumerator(for: parentItemIdentifier)
+        // Use FileManager to list the directory contents
+        let fm = FileManager.default
+        let contents = try fm.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: [
+            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey
+        ])
         
-        // Get the items from the enumerator
-        let items = try await enumerator.items()
-        
-        // Map NSFileProviderItems to our FileItem model
-        return items.compactMap { item in
-            guard let itemIdentifier = item.itemIdentifier.rawValue as? String else { return nil }
+        // Map URLs to FileItem objects
+        var fileItems = [FileItem]()
+        for url in contents {
+            let resourceValues = try url.resourceValues(forKeys: [
+                .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey
+            ])
             
-            // Get content type based on filename
-            let contentType = UTType(filenameExtension: item.filename.pathExtension)
+            let isDirectory = resourceValues.isDirectory ?? false
+            let contentType = UTType(filenameExtension: url.pathExtension)
             
-            // Create URL (this may not be a real file URL for cloud providers)
-            let url = URL(fileURLWithPath: item.filename)
-            
-            return FileItem(
-                id: itemIdentifier,
-                name: item.filename.lastPathComponent,
+            let fileItem = FileItem(
+                id: url.path,
+                name: url.lastPathComponent,
                 url: url,
-                size: item.documentSize as? Int64,
-                modificationDate: item.contentModificationDate,
-                creationDate: item.creationDate,
-                isDirectory: item.capabilities.contains(.allowsContentEnumerating),
+                size: Int64(resourceValues.fileSize ?? 0),
+                modificationDate: resourceValues.contentModificationDate,
+                creationDate: resourceValues.creationDate,
+                isDirectory: isDirectory,
                 contentType: contentType,
                 providerDomainName: domain.identifier.rawValue,
-                providerItemIdentifier: itemIdentifier,
-                parentID: parentItemIdentifier.rawValue as? String
+                providerItemIdentifier: nil, // We don't have this information directly
+                parentID: directory?.id
             )
+            
+            fileItems.append(fileItem)
         }
+        
+        return fileItems
     }
     
     public func getItemDetails(itemID: String, from provider: FileProviderModel) async throws -> FileItem {
@@ -284,7 +292,7 @@ public class FileProviderService: FileProviderServiceProtocol {
                 id: url.path,
                 name: url.lastPathComponent,
                 url: url,
-                size: resourceValues.fileSize as? Int64,
+                size: Int64(resourceValues.fileSize ?? 0),
                 modificationDate: resourceValues.contentModificationDate,
                 creationDate: resourceValues.creationDate,
                 isDirectory: isDirectory,
@@ -302,33 +310,36 @@ public class FileProviderService: FileProviderServiceProtocol {
             throw FileProviderError.providerUnavailable
         }
         
-        let itemIdentifier = NSFileProviderItemIdentifier(itemID)
+        // For cloud providers, convert the itemID to a URL if possible
+        let url = URL(fileURLWithPath: itemID)
         
-        do {
-            let item = try await manager.item(for: itemIdentifier)
-            
-            // Get content type based on filename
-            let contentType = UTType(filenameExtension: item.filename.pathExtension)
-            
-            // Create URL
-            let url = try await manager.getUserVisibleURL(for: itemIdentifier)
-            
-            return FileItem(
-                id: itemIdentifier.rawValue as? String ?? UUID().uuidString,
-                name: item.filename.lastPathComponent,
-                url: url,
-                size: item.documentSize as? Int64,
-                modificationDate: item.contentModificationDate,
-                creationDate: item.creationDate,
-                isDirectory: item.capabilities.contains(.allowsContentEnumerating),
-                contentType: contentType,
-                providerDomainName: domain.identifier.rawValue,
-                providerItemIdentifier: itemIdentifier.rawValue as? String,
-                parentID: item.parentItemIdentifier.rawValue as? String
-            )
-        } catch {
-            throw FileProviderError.fromNSError(error as NSError)
+        // Check if file exists
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else {
+            throw FileProviderError.fileNotFound
         }
+        
+        // Get file attributes
+        let resourceValues = try url.resourceValues(forKeys: [
+            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey
+        ])
+        
+        let isDirectory = resourceValues.isDirectory ?? false
+        let contentType = UTType(filenameExtension: url.pathExtension)
+        
+        return FileItem(
+            id: url.path,
+            name: url.lastPathComponent,
+            url: url,
+            size: Int64(resourceValues.fileSize ?? 0),
+            modificationDate: resourceValues.contentModificationDate,
+            creationDate: resourceValues.creationDate,
+            isDirectory: isDirectory,
+            contentType: contentType,
+            providerDomainName: domain.identifier.rawValue,
+            providerItemIdentifier: nil, // We don't have this information directly
+            parentID: url.deletingLastPathComponent().path
+        )
     }
     
     public func searchFiles(query: String, in provider: FileProviderModel, contentTypes: [UTType]? = nil) async throws -> [FileItem] {
@@ -381,7 +392,7 @@ public class FileProviderService: FileProviderServiceProtocol {
                             id: url.path,
                             name: url.lastPathComponent,
                             url: url,
-                            size: resourceValues.fileSize as? Int64,
+                            size: Int64(resourceValues.fileSize ?? 0),
                             modificationDate: resourceValues.contentModificationDate,
                             creationDate: resourceValues.creationDate,
                             isDirectory: isDirectory,
@@ -409,53 +420,76 @@ public class FileProviderService: FileProviderServiceProtocol {
             throw FileProviderError.providerUnavailable
         }
         
-        // Start with root directory
-        let enumerator = try await manager.enumerator(for: .rootContainer)
-        let items = try await enumerator.items()
+        // Get root directory URL
+        let rootURL = try await manager.getUserVisibleURL(for: .rootContainer)
         
-        // Filter the items based on the query
-        return items.compactMap { item in
-            // Check if filename matches query
-            let filename = item.filename.lastPathComponent.lowercased()
-            if filename.contains(query.lowercased()) {
-                guard let itemIdentifier = item.itemIdentifier.rawValue as? String else { return nil }
-                
-                // Get content type based on filename
-                let contentType = UTType(filenameExtension: item.filename.pathExtension)
-                
-                // Filter by content type if specified
-                if let contentTypes = contentTypes, !contentTypes.isEmpty {
-                    guard let contentType = contentType else { return nil }
-                    
-                    let matchesContentType = contentTypes.contains { type in
-                        contentType.conforms(to: type)
-                    }
-                    
-                    if !matchesContentType {
-                        return nil
-                    }
-                }
-                
-                // Create URL
-                let url = URL(fileURLWithPath: item.filename)
-                
-                return FileItem(
-                    id: itemIdentifier,
-                    name: item.filename.lastPathComponent,
-                    url: url,
-                    size: item.documentSize as? Int64,
-                    modificationDate: item.contentModificationDate,
-                    creationDate: item.creationDate,
-                    isDirectory: item.capabilities.contains(.allowsContentEnumerating),
-                    contentType: contentType,
-                    providerDomainName: domain.identifier.rawValue,
-                    providerItemIdentifier: itemIdentifier,
-                    parentID: item.parentItemIdentifier.rawValue as? String
-                )
+        // Use a simplified recursive search approach
+        func searchDirectory(_ directoryURL: URL, depth: Int = 0) throws -> [FileItem] {
+            // Limit recursion depth to avoid performance issues
+            if depth > 3 {
+                return []
             }
             
-            return nil
+            let fm = FileManager.default
+            let contents = try fm.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: [
+                .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey
+            ])
+            
+            var results = [FileItem]()
+            
+            for url in contents {
+                let resourceValues = try url.resourceValues(forKeys: [
+                    .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey
+                ])
+                
+                let isDirectory = resourceValues.isDirectory ?? false
+                
+                // If it's a directory, search recursively
+                if isDirectory {
+                    let subdirectoryResults = try searchDirectory(url, depth: depth + 1)
+                    results.append(contentsOf: subdirectoryResults)
+                }
+                
+                // Check if filename matches query
+                let filename = url.lastPathComponent.lowercased()
+                if filename.contains(query.lowercased()) {
+                    let contentType = UTType(filenameExtension: url.pathExtension)
+                    
+                    // Filter by content type if specified
+                    if let contentTypes = contentTypes, !contentTypes.isEmpty {
+                        guard let contentType = contentType else { continue }
+                        
+                        let matchesContentType = contentTypes.contains { type in
+                            contentType.conforms(to: type)
+                        }
+                        
+                        if !matchesContentType {
+                            continue
+                        }
+                    }
+                    
+                    let fileItem = FileItem(
+                        id: url.path,
+                        name: url.lastPathComponent,
+                        url: url,
+                        size: Int64(resourceValues.fileSize ?? 0),
+                        modificationDate: resourceValues.contentModificationDate,
+                        creationDate: resourceValues.creationDate,
+                        isDirectory: isDirectory,
+                        contentType: contentType,
+                        providerDomainName: domain.identifier.rawValue,
+                        providerItemIdentifier: nil,
+                        parentID: url.deletingLastPathComponent().path
+                    )
+                    
+                    results.append(fileItem)
+                }
+            }
+            
+            return results
         }
+        
+        return try searchDirectory(rootURL)
     }
     
     public func createDirectory(name: String, in parent: FileItem, provider: FileProviderModel) async throws -> FileItem {
@@ -534,7 +568,7 @@ public class FileProviderService: FileProviderServiceProtocol {
                 id: destinationURL.path,
                 name: item.name,
                 url: destinationURL,
-                size: resourceValues.fileSize as? Int64,
+                size: Int64(resourceValues.fileSize ?? 0),
                 modificationDate: resourceValues.contentModificationDate,
                 creationDate: resourceValues.creationDate,
                 isDirectory: resourceValues.isDirectory ?? false,
@@ -575,7 +609,7 @@ public class FileProviderService: FileProviderServiceProtocol {
                 id: newURL.path,
                 name: newName,
                 url: newURL,
-                size: resourceValues.fileSize as? Int64,
+                size: Int64(resourceValues.fileSize ?? 0),
                 modificationDate: resourceValues.contentModificationDate,
                 creationDate: resourceValues.creationDate,
                 isDirectory: resourceValues.isDirectory ?? false,
@@ -615,7 +649,7 @@ public class FileProviderService: FileProviderServiceProtocol {
                 id: destinationURL.path,
                 name: item.name,
                 url: destinationURL,
-                size: resourceValues.fileSize as? Int64,
+                size: Int64(resourceValues.fileSize ?? 0),
                 modificationDate: resourceValues.contentModificationDate,
                 creationDate: resourceValues.creationDate,
                 isDirectory: resourceValues.isDirectory ?? false,
@@ -646,13 +680,14 @@ public class FileProviderService: FileProviderServiceProtocol {
         }
         
         guard let providerItemID = item.providerItemIdentifier else {
-            throw FileProviderError.fileNotFound
+            // If we don't have a provider item identifier, just return the URL
+            // This may not be ideal for all providers but works for many
+            return item.url
         }
-        
-        let itemIdentifier = NSFileProviderItemIdentifier(providerItemID)
         
         do {
             // Get a URL that can be used to access the file locally
+            let itemIdentifier = NSFileProviderItemIdentifier(providerItemID)
             let localURL = try await manager.getUserVisibleURL(for: itemIdentifier)
             
             // Check if file exists
@@ -725,8 +760,8 @@ public class FileProviderService: FileProviderServiceProtocol {
         } catch {
             provider.setError(error)
             throw FileProviderError.fromNSError(error as NSError)
-        } finally {
-            provider.updateSyncState(isSynchronizing: false)
         }
+        
+        provider.updateSyncState(isSynchronizing: false)
     }
 }

@@ -36,127 +36,94 @@ public enum FileProviderError: Error {
     // System errors
     case outOfDiskSpace
     case systemError(error: Error)
-    case nsFileProviderError(error: NSFileProviderError)
+    case nsFileProviderError(code: Int, description: String)
     
     // Other
     case unknown(error: Error?)
-}
-
-// MARK: - FileProviderError Extension for LocalizedError
-extension FileProviderError: LocalizedError {
+    
+    // MARK: - LocalizedError Implementation
+    
     public var errorDescription: String? {
         switch self {
-        case .providerNotFound:
-            return "The file provider was not found"
-        case .providerOffline:
-            return "The file provider is currently offline"
-        case .providerUnavailable:
-            return "The file provider is currently unavailable"
-        case .providerAuthenticationRequired:
-            return "Authentication required for the file provider"
-        case .connectionError:
-            return "Could not connect to the file provider"
+        case .providerNotFound: "The file provider was not found"
+        case .providerOffline: "The file provider is currently offline"
+        case .providerUnavailable: "The file provider is currently unavailable"
+        case .providerAuthenticationRequired: "Authentication required for the file provider"
+        case .connectionError: "Could not connect to the file provider"
             
-        case .fileNotFound:
-            return "The requested file was not found"
-        case .fileAccessDenied:
-            return "Access to the file was denied"
-        case .fileAlreadyExists:
-            return "A file with this name already exists"
-        case .fileCorrupted:
-            return "The file appears to be corrupted"
+        case .fileNotFound: "The requested file was not found"
+        case .fileAccessDenied: "Access to the file was denied"
+        case .fileAlreadyExists: "A file with this name already exists"
+        case .fileCorrupted: "The file appears to be corrupted"
             
-        case .operationFailed:
-            return "The operation failed to complete"
-        case .operationNotSupported:
-            return "This operation is not supported by the file provider"
-        case .operationCancelled:
-            return "The operation was cancelled"
-        case .operationTimedOut:
-            return "The operation timed out"
+        case .operationFailed: "The operation failed to complete"
+        case .operationNotSupported: "This operation is not supported by the file provider"
+        case .operationCancelled: "The operation was cancelled"
+        case .operationTimedOut: "The operation timed out"
             
-        case .unsupportedFileFormat:
-            return "The file format is not supported"
-        case .fileTooLarge:
-            return "The file is too large"
+        case .unsupportedFileFormat: "The file format is not supported"
+        case .fileTooLarge: "The file is too large"
             
-        case .outOfDiskSpace:
-            return "There is not enough disk space available"
-        case .systemError(let error):
-            return "System error: \(error.localizedDescription)"
-        case .nsFileProviderError(let error):
-            return mapNSFileProviderError(error)
+        case .outOfDiskSpace: "There is not enough disk space available"
+        case .systemError(let error): "System error: \(error.localizedDescription)"
+        case .nsFileProviderError(_, let description): description
             
         case .unknown(let error):
             if let error = error {
-                return "An unknown error occurred: \(error.localizedDescription)"
+                "An unknown error occurred: \(error.localizedDescription)"
             } else {
-                return "An unknown error occurred"
+                "An unknown error occurred"
             }
         }
     }
     
-    private func mapNSFileProviderError(_ error: NSFileProviderError) -> String {
-        switch error.code {
-        case NSFileProviderError.noSuchItem:
-            return "The requested item doesn't exist"
-        case NSFileProviderError.itemAlreadyExists:
-            return "An item with this name already exists"
-        case NSFileProviderError.fileTooLarge:
-            return "The file is too large to be handled by the provider"
-        case NSFileProviderError.syncAnchorExpired:
-            return "The sync anchor has expired, please refresh"
-        case NSFileProviderError.notAuthenticated:
-            return "You are not authenticated with this provider"
-        case NSFileProviderError.providerNotFound:
-            return "The requested provider could not be found"
-        case NSFileProviderError.providerTranslocated:
-            return "The provider has been moved from its original location"
-        case NSFileProviderError.serverUnreachable:
-            return "The server is currently unreachable"
-        default:
-            return "File provider error: \(error.localizedDescription)"
+    // MARK: - Helper Methods
+    
+    /// Maps an NSFileProviderError code to a descriptive string
+    private static func mapNSFileProviderErrorCode(_ code: Int) -> String {
+        // Using the numeric codes since the enum cases seem to be unavailable
+        switch code {
+        case 0: "The requested item doesn't exist"                     // NSFileProviderError.noSuchItem
+        case 1: "An item with this name already exists"                // NSFileProviderError.itemAlreadyExists
+        case 2: "The file is too large to be handled by the provider"  // NSFileProviderError.fileTooLarge
+        case 3: "The sync anchor has expired, please refresh"          // NSFileProviderError.syncAnchorExpired
+        case 4: "You are not authenticated with this provider"         // NSFileProviderError.notAuthenticated
+        case 5: "The requested provider could not be found"            // NSFileProviderError.providerNotFound
+        case 6: "The provider has been moved from its original location" // NSFileProviderError.providerTranslocated
+        case 7: "The server is currently unreachable"                  // NSFileProviderError.serverUnreachable
+        default: "File provider error: Code \(code)"
         }
     }
-}
-
-// MARK: - FileProviderError Extension for Conversions
-extension FileProviderError {
+    
     /// Converts an NSError to a FileProviderError
     /// - Parameter error: The NSError to convert
     /// - Returns: A FileProviderError
     public static func fromNSError(_ error: NSError) -> FileProviderError {
         // Check if it's an NSFileProviderError
         if error.domain == NSFileProviderErrorDomain {
-            return .nsFileProviderError(error: NSFileProviderError(_nsError: error))
+            return .nsFileProviderError(
+                code: error.code,
+                description: mapNSFileProviderErrorCode(error.code)
+            )
         }
         
         // Handle common NSErrors
         switch error.domain {
         case NSCocoaErrorDomain:
             switch error.code {
-            case NSFileNoSuchFileError:
-                return .fileNotFound
-            case NSFileWriteOutOfSpaceError:
-                return .outOfDiskSpace
-            case NSFileWriteNoPermissionError:
-                return .fileAccessDenied
-            default:
-                break
+            case NSFileNoSuchFileError: return .fileNotFound
+            case NSFileWriteOutOfSpaceError: return .outOfDiskSpace
+            case NSFileWriteNoPermissionError: return .fileAccessDenied
+            default: break
             }
         case NSURLErrorDomain:
             switch error.code {
-            case NSURLErrorNotConnectedToInternet:
-                return .providerOffline
-            case NSURLErrorTimedOut:
-                return .operationTimedOut
-            case NSURLErrorCancelled:
-                return .operationCancelled
-            default:
-                return .connectionError
+            case NSURLErrorNotConnectedToInternet: return .providerOffline
+            case NSURLErrorTimedOut: return .operationTimedOut
+            case NSURLErrorCancelled: return .operationCancelled
+            default: return .connectionError
             }
-        default:
-            break
+        default: break
         }
         
         // For other errors

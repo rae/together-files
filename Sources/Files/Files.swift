@@ -73,7 +73,16 @@ public struct Files {
 
 /// A view for displaying and managing the playlist
 public struct PlaylistView: View {
-    @ObservedObject var viewModel: FileSelectionViewModel
+    // Using the modern @State with @Observable model
+    @State var viewModel: FileSelectionViewModel
+    
+    // For iOS/tvOS/visionOS, we'll use EditMode
+    #if os(iOS) || os(tvOS) || os(visionOS)
+    @State private var editMode: EditMode = .inactive
+    #else
+    // For macOS, we'll use a simple boolean
+    @State private var isEditing: Bool = false
+    #endif
     
     public var body: some View {
         List {
@@ -98,43 +107,14 @@ public struct PlaylistView: View {
                     .buttonStyle(.bordered)
                 }
             } else {
-                ForEach(viewModel.selectedFiles) { file in
-                    HStack {
-                        Image(systemName: file == viewModel.currentPlayingFile ? "play.circle.fill" : "play.circle")
-                            .foregroundColor(file == viewModel.currentPlayingFile ? .accentColor : .secondary)
-                        
-                        VStack(alignment: .leading) {
-                            Text(file.name)
-                                .font(.body)
-                                .lineLimit(1)
-                            
-                            if let size = file.size {
-                                Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            viewModel.removeFromPlaylist(file)
-                        }) {
-                            Image(systemName: "minus.circle")
-                                .foregroundColor(.red)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        viewModel.setCurrentPlayingFile(file)
-                    }
-                }
-                .onMove { from, to in
-                    if from.count == 1 && to < viewModel.selectedFiles.count {
-                        viewModel.movePlaylistItem(fromIndex: from.first!, toIndex: to)
-                    }
-                }
+                // Platform-specific way to enable list editing
+                #if os(iOS) || os(tvOS) || os(visionOS)
+                playlistContent
+                    .environment(\.editMode, $editMode)
+                #else
+                playlistContent
+                    .moveDisabled(!isEditing)
+                #endif
                 
                 Section {
                     Button(action: {
@@ -143,7 +123,7 @@ public struct PlaylistView: View {
                         HStack {
                             Spacer()
                             Text("Clear Playlist")
-                                .foregroundColor(.red)
+                                .foregroundColor(FilesColor.red.color)
                             Spacer()
                         }
                     }
@@ -153,7 +133,8 @@ public struct PlaylistView: View {
         }
         .navigationTitle("Playlist")
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            // Cross-platform toolbar items
+            ToolbarItem {
                 NavigationLink(destination: Files.fileSelectionView(
                     onSelectFile: { file in
                         viewModel.addToPlaylist(file)
@@ -168,9 +149,60 @@ public struct PlaylistView: View {
                 }
             }
             
+            // Platform-specific edit button
+            #if os(iOS) || os(tvOS) || os(visionOS)
             ToolbarItem(placement: .navigationBarTrailing) {
                 EditButton()
                     .disabled(viewModel.selectedFiles.isEmpty)
+            }
+            #else
+            ToolbarItem {
+                Button(isEditing ? "Done" : "Edit") {
+                    isEditing.toggle()
+                }
+                .disabled(viewModel.selectedFiles.isEmpty)
+            }
+            #endif
+        }
+    }
+    
+    // Extract playlist content to avoid duplication
+    private var playlistContent: some View {
+        ForEach(viewModel.selectedFiles) { file in
+            HStack {
+                Image(systemName: file == viewModel.currentPlayingFile ? "play.circle.fill" : "play.circle")
+                    .foregroundColor(file == viewModel.currentPlayingFile ? FilesColor.accent.color : FilesColor.secondaryText.color)
+                
+                VStack(alignment: .leading) {
+                    Text(file.name)
+                        .font(.body)
+                        .lineLimit(1)
+                    
+                    if let size = file.size {
+                        Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                            .font(.caption)
+                            .foregroundColor(FilesColor.secondaryText.color)
+                    }
+                }
+                
+                Spacer()
+                
+                Button(action: {
+                    viewModel.removeFromPlaylist(file)
+                }) {
+                    Image(systemName: "minus.circle")
+                        .foregroundColor(FilesColor.red.color)
+                }
+                .buttonStyle(.plain)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                viewModel.setCurrentPlayingFile(file)
+            }
+        }
+        .onMove { from, to in
+            if from.count == 1 && to < viewModel.selectedFiles.count {
+                viewModel.movePlaylistItem(fromIndex: from.first!, toIndex: to)
             }
         }
     }

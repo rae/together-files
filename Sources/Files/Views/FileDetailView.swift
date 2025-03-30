@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if os(tvOS)
+import UIKit
+#endif
 import AVKit
 
 /// A view for displaying details about a file
@@ -40,7 +43,7 @@ public struct FileDetailView: View {
                 } else {
                     ZStack {
                         Rectangle()
-                            .fill(Color(UIColor.secondarySystemBackground))
+                            .fill(Color(FilesColor.secondaryBackground.color))
                             .frame(height: 200)
                             .cornerRadius(12)
                         
@@ -58,7 +61,7 @@ public struct FileDetailView: View {
                         .lineLimit(2)
                     
                     if let contentType = file.contentType {
-                        Text(contentType.localizedDescription)
+                        Text(contentType.localizedDescription ?? "")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -209,11 +212,13 @@ public struct FileDetailView: View {
     
     /// Shares the file
     private func shareFile() {
+        #if os(tvOS)
+        #else
         Task {
             do {
                 if let url = await fileSelectionViewModel.getLocalURL(for: file) {
                     // Share the file using UIActivityViewController
-                    let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                    let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: [])
                     
                     // Present the activity view controller
                     if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
@@ -226,6 +231,7 @@ public struct FileDetailView: View {
                 }
             }
         }
+        #endif
     }
     
     /// Determines the icon name to use for a file item

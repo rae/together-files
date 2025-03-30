@@ -19,8 +19,8 @@ public class FileProviderWrapper {
     /// The file provider manager
     private let manager: NSFileProviderManager
     
-    /// Cache for file provider items to avoid repeated fetches
-    private var itemCache: [NSFileProviderItemIdentifier: NSFileProviderItem] = [:]
+    /// Cache for file provider item metadata
+    private var itemCache: [String: [URLResourceKey: Any]] = [:]
     
     // MARK: - Initialization
     
@@ -39,45 +39,38 @@ public class FileProviderWrapper {
     
     // MARK: - Public Methods
     
-    /// Gets the root container of the file provider
-    /// - Returns: The root container item
-    public func getRootContainer() async throws -> NSFileProviderItem {
-        return try await getItem(for: .rootContainer)
-    }
-    
-    /// Gets an item by its identifier
-    /// - Parameter identifier: The item identifier
-    /// - Returns: The item
-    public func getItem(for identifier: NSFileProviderItemIdentifier) async throws -> NSFileProviderItem {
-        // Check cache first
-        if let cachedItem = itemCache[identifier] {
-            return cachedItem
-        }
-        
-        // Fetch the item
+    /// Gets the root directory URL
+    /// - Returns: The root directory URL
+    public func getRootDirectoryURL() async throws -> URL {
         do {
-            let item = try await manager.item(for: identifier)
-            
-            // Cache the item for future use
-            itemCache[identifier] = item
-            
-            return item
+            return try await manager.getUserVisibleURL(for: .rootContainer)
         } catch {
             throw FileProviderError.fromNSError(error as NSError)
         }
     }
     
     /// Gets the contents of a directory
-    /// - Parameter identifier: The identifier of the directory
-    /// - Returns: The contents of the directory
-    public func getContents(of identifier: NSFileProviderItemIdentifier) async throws -> [NSFileProviderItem] {
-        let enumerator = try await manager.enumerator(for: identifier)
-        return try await enumerator.items()
+    /// - Parameter directoryURL: The URL of the directory
+    /// - Returns: The contents of the directory as URLs
+    public func getContents(of directoryURL: URL) async throws -> [URL] {
+        let fileManager = FileManager.default
+        
+        // Check if this URL is accessible
+        guard fileManager.isReadableFile(atPath: directoryURL.path) else {
+            throw FileProviderError.fileAccessDenied
+        }
+        
+        // Get directory contents
+        return try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey],
+            options: [.skipsHiddenFiles]
+        )
     }
     
-    /// Gets a URL for an item
-    /// - Parameter identifier: The identifier of the item
-    /// - Returns: The URL
+    /// Gets a URL for an item identifier
+    /// - Parameter identifier: The identifier
+    /// - Returns: The URL for the item
     public func getURL(for identifier: NSFileProviderItemIdentifier) async throws -> URL {
         do {
             return try await manager.getUserVisibleURL(for: identifier)
@@ -86,49 +79,63 @@ public class FileProviderWrapper {
         }
     }
     
-    /// Gets the working set of the file provider
-    /// - Returns: The working set items
-    public func getWorkingSet() async throws -> [NSFileProviderItem] {
-        let enumerator = try await manager.enumerator(for: .workingSet)
-        return try await enumerator.items()
-    }
-    
-    /// Gets recently accessed items
-    /// - Returns: The recently accessed items
-    public func getRecentItems() async throws -> [NSFileProviderItem] {
-        let workingSet = try await getWorkingSet()
-        
-        // Sort the working set by access date
-        return workingSet.sorted { item1, item2 in
-            let date1 = item1.contentModificationDate ?? Date.distantPast
-            let date2 = item2.contentModificationDate ?? Date.distantPast
-            return date1 > date2
+    /// Gets metadata for a file URL
+    /// - Parameter url: The URL of the file
+    /// - Returns: The metadata for the file
+    public func getItemMetadata(for url: URL) async throws -> [URLResourceKey: Any] {
+        // Check if we have cached metadata
+        if let cachedMetadata = itemCache[url.path] {
+            return cachedMetadata
         }
-    }
-    
-    /// Gets favorite items
-    /// - Returns: The favorite items
-    public func getFavoriteItems() async throws -> [NSFileProviderItem] {
-        let enumerator = try await manager.enumerator(for: .favorites)
-        return try await enumerator.items()
-    }
-    
-    /// Gets shared items
-    /// - Returns: The shared items
-    public func getSharedItems() async throws -> [NSFileProviderItem] {
-        let enumerator = try await manager.enumerator(for: .shared)
-        return try await enumerator.items()
-    }
-    
-    /// Searches for items matching a query
-    /// - Parameter query: The search query
-    /// - Returns: The matching items
-    public func search(query: String) async throws -> [NSFileProviderItem] {
-        // This is a simplified implementation since not all providers support search
-        // In a real app, you'd want to use the FileProvider search APIs
         
-        let allItems = try await searchRecursively(from: .rootContainer, query: query.lowercased())
-        return allItems
+        // Get resource values from the URL
+        let resourceKeys: Set<URLResourceKey> = [
+            .isDirectoryKey,
+            .fileSizeKey,
+            .contentModificationDateKey,
+            .creationDateKey,
+            .nameKey,
+            .pathKey,
+            .fileResourceTypeKey
+        ]
+        
+        let resourceValues = try url.resourceValues(forKeys: resourceKeys)
+        
+        // Convert to dictionary
+        var metadata: [URLResourceKey: Any] = [:]
+        
+        if let isDirectory = resourceValues.isDirectory {
+            metadata[.isDirectoryKey] = isDirectory
+        }
+        
+        if let fileSize = resourceValues.fileSize {
+            metadata[.fileSizeKey] = fileSize
+        }
+        
+        if let modificationDate = resourceValues.contentModificationDate {
+            metadata[.contentModificationDateKey] = modificationDate
+        }
+        
+        if let creationDate = resourceValues.creationDate {
+            metadata[.creationDateKey] = creationDate
+        }
+        
+        if let name = resourceValues.name {
+            metadata[.nameKey] = name
+        }
+        
+        if let path = resourceValues.path {
+            metadata[.pathKey] = path
+        }
+        
+        if let fileResourceType = resourceValues.fileResourceType {
+            metadata[.fileResourceTypeKey] = fileResourceType
+        }
+        
+        // Cache the metadata
+        itemCache[url.path] = metadata
+        
+        return metadata
     }
     
     /// Synchronizes the provider
@@ -140,46 +147,46 @@ public class FileProviderWrapper {
         }
     }
     
-    /// Creates a file item from an NSFileProviderItem
-    /// - Parameter item: The NSFileProviderItem
+    /// Creates a file item from a URL
+    /// - Parameter url: The URL
     /// - Returns: A FileItem
-    public func createFileItem(from item: NSFileProviderItem) async throws -> FileItem {
-        let url: URL
+    public func createFileItem(from url: URL) async throws -> FileItem {
+        // Get metadata
+        let metadata = try await getItemMetadata(for: url)
         
-        do {
-            url = try await manager.getUserVisibleURL(for: item.itemIdentifier)
-        } catch {
-            // If we can't get a real URL, create a placeholder
-            url = URL(fileURLWithPath: item.filename)
-        }
+        // Get basic properties
+        let isDirectory = metadata[.isDirectoryKey] as? Bool ?? false
+        let fileSize = metadata[.fileSizeKey] as? Int64 ?? 0
+        let modificationDate = metadata[.contentModificationDateKey] as? Date
+        let creationDate = metadata[.creationDateKey] as? Date
         
         // Get content type based on filename
         let contentType = UTType(filenameExtension: url.pathExtension)
         
         return FileItem(
-            id: item.itemIdentifier.rawValue as? String ?? UUID().uuidString,
-            name: item.filename.lastPathComponent,
+            id: url.path,
+            name: url.lastPathComponent,
             url: url,
-            size: item.documentSize as? Int64,
-            modificationDate: item.contentModificationDate,
-            creationDate: item.creationDate,
-            isDirectory: item.capabilities.contains(.allowsContentEnumerating),
+            size: isDirectory ? nil : fileSize,
+            modificationDate: modificationDate,
+            creationDate: creationDate,
+            isDirectory: isDirectory,
             contentType: contentType,
             providerDomainName: domain.identifier.rawValue,
-            providerItemIdentifier: item.itemIdentifier.rawValue as? String,
-            parentID: item.parentItemIdentifier.rawValue as? String
+            providerItemIdentifier: nil,
+            parentID: url.deletingLastPathComponent().path
         )
     }
     
-    /// Converts a list of NSFileProviderItems to FileItems
-    /// - Parameter items: The NSFileProviderItems to convert
+    /// Converts a list of URLs to FileItems
+    /// - Parameter urls: The URLs to convert
     /// - Returns: An array of FileItems
-    public func createFileItems(from items: [NSFileProviderItem]) async throws -> [FileItem] {
+    public func createFileItems(from urls: [URL]) async throws -> [FileItem] {
         var fileItems: [FileItem] = []
         
-        for item in items {
+        for url in urls {
             do {
-                let fileItem = try await createFileItem(from: item)
+                let fileItem = try await createFileItem(from: url)
                 fileItems.append(fileItem)
             } catch {
                 // Skip items that can't be converted
@@ -190,32 +197,79 @@ public class FileProviderWrapper {
         return fileItems
     }
     
-    // MARK: - Private Methods
-    
-    /// Searches recursively for items matching a query
+    /// Gets recent files
     /// - Parameters:
-    ///   - parentIdentifier: The parent identifier to start searching from
-    ///   - query: The search query
-    /// - Returns: The matching items
-    private func searchRecursively(from parentIdentifier: NSFileProviderItemIdentifier, query: String) async throws -> [NSFileProviderItem] {
-        var results: [NSFileProviderItem] = []
+    ///   - maxItems: Maximum number of items to return
+    ///   - contentTypes: Optional content types to filter by
+    /// - Returns: Recently modified files
+    public func getRecentFiles(maxItems: Int = 20, contentTypes: [UTType]? = nil) async throws -> [FileItem] {
+        // Start from root directory
+        let rootURL = try await getRootDirectoryURL()
         
-        // Get items in the current directory
-        let items = try await getContents(of: parentIdentifier)
+        // Get all files recursively, up to a reasonable depth
+        let fileItems = try await getFilesRecursively(from: rootURL, maxDepth: 3)
         
-        for item in items {
-            // Check if this item matches the query
-            if item.filename.lowercased().contains(query) {
-                results.append(item)
+        // Filter by content type if specified
+        let filteredItems: [FileItem]
+        if let contentTypes = contentTypes, !contentTypes.isEmpty {
+            filteredItems = fileItems.filter { item in
+                guard let itemType = item.contentType else { return false }
+                return contentTypes.contains { itemType.conforms(to: $0) }
             }
-            
-            // If this is a directory, search it too
-            if item.capabilities.contains(.allowsContentEnumerating) {
-                let subResults = try await searchRecursively(from: item.itemIdentifier, query: query)
-                results.append(contentsOf: subResults)
-            }
+        } else {
+            filteredItems = fileItems
         }
         
-        return results
+        // Sort by modification date (newest first)
+        let sortedItems = filteredItems.sorted { (item1, item2) -> Bool in
+            let date1 = item1.modificationDate ?? Date.distantPast
+            let date2 = item2.modificationDate ?? Date.distantPast
+            return date1 > date2
+        }
+        
+        // Return the top N items
+        return Array(sortedItems.prefix(maxItems))
+    }
+    
+    // MARK: - Private Methods
+    
+    /// Gets files recursively from a directory
+    /// - Parameters:
+    ///   - directoryURL: The directory URL
+    ///   - maxDepth: Maximum recursion depth
+    ///   - currentDepth: Current recursion depth
+    /// - Returns: Files in the directory and subdirectories
+    private func getFilesRecursively(from directoryURL: URL, maxDepth: Int, currentDepth: Int = 0) async throws -> [FileItem] {
+        // Stop if we've reached the maximum depth
+        if currentDepth >= maxDepth {
+            return []
+        }
+        
+        // Get directory contents
+        let contents = try await getContents(of: directoryURL)
+        
+        var fileItems: [FileItem] = []
+        
+        for url in contents {
+            // Get metadata
+            let metadata = try await getItemMetadata(for: url)
+            let isDirectory = metadata[.isDirectoryKey] as? Bool ?? false
+            
+            // If it's a directory, process recursively
+            if isDirectory {
+                let subdirectoryItems = try await getFilesRecursively(
+                    from: url,
+                    maxDepth: maxDepth,
+                    currentDepth: currentDepth + 1
+                )
+                fileItems.append(contentsOf: subdirectoryItems)
+            }
+            
+            // Create file item
+            let fileItem = try await createFileItem(from: url)
+            fileItems.append(fileItem)
+        }
+        
+        return fileItems
     }
 }
