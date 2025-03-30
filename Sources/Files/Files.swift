@@ -1,148 +1,183 @@
-// Files.swift
-// Files
 //
-// Created on 2025-03-30.
+//  Files.swift
+//  Files
+//
+//  Created by Claude on 2025-03-30.
 //
 
-import Foundation
 import SwiftUI
-import AVKit
 import UniformTypeIdentifiers
 
 /// Main entry point for the Files package
-public enum Files {
-    /// Create a video file selector view
+public struct Files {
+    /// Returns a view for browsing and selecting files
     /// - Parameters:
-    ///   - selectedVideoURL: Binding to the selected video URL
-    ///   - onSelectionChanged: Optional callback when selection changes
-    /// - Returns: A VideoFileSelector view
-    public static func videoSelector(
-        selectedVideoURL: Binding<URL?>,
-        onSelectionChanged: ((URL?) -> Void)? = nil
+    ///   - onSelectFile: Callback for when a file is selected
+    ///   - onAddToPlaylist: Callback for when a file is added to the playlist
+    ///   - allowMultipleSelection: Whether to allow selecting multiple files
+    ///   - contentTypes: Content types to filter by
+    /// - Returns: A view for browsing and selecting files
+    public static func fileSelectionView(
+        onSelectFile: ((FileItem) async -> Void)? = nil,
+        onAddToPlaylist: ((FileItem) -> Void)? = nil,
+        allowMultipleSelection: Bool = false,
+        contentTypes: [UTType]? = nil
     ) -> some View {
-        VideoFileSelector(
-            selectedVideoURL: selectedVideoURL,
-            onSelectionChanged: onSelectionChanged
-        )
-    }
-    
-    /// Create a document picker button
-    /// - Parameters:
-    ///   - label: The button label
-    ///   - systemImage: The system image name
-    ///   - contentTypes: The content types to filter by
-    ///   - allowsMultipleSelection: Whether to allow selecting multiple files
-    ///   - onPickedDocuments: Callback with the selected document URLs
-    /// - Returns: A DocumentPickerButton view
-    public static func documentPickerButton(
-        label: String = "Select File",
-        systemImage: String = "doc",
-        contentTypes: [UTType] = [.movie, .video, .audiovisualContent],
-        allowsMultipleSelection: Bool = false,
-        onPickedDocuments: @escaping ([URL]) -> Void
-    ) -> some View {
-        DocumentPickerButton(
-            label: label,
-            systemImage: systemImage,
-            contentTypes: contentTypes,
-            allowsMultipleSelection: allowsMultipleSelection,
-            onPickedDocuments: onPickedDocuments
-        )
-    }
-    
-    /// Create a file browser view
-    /// - Parameters:
-    ///   - onFileSelected: Callback when a file is selected
-    ///   - allowDirectorySelection: Whether directories can be selected
-    /// - Returns: A FileBrowserView
-    public static func fileBrowser(
-        onFileSelected: @escaping (URL) -> Void,
-        allowDirectorySelection: Bool = false
-    ) -> some View {
-        FileBrowserView(
-            viewModel: FileBrowserViewModel(),
-            onFileSelected: onFileSelected,
-            allowDirectorySelection: allowDirectorySelection
-        )
-    }
-    
-    /// Create a player for a video URL
-    /// - Parameter url: The video URL
-    /// - Returns: An AVPlayer instance
-    public static func createPlayer(for url: URL) -> AVPlayer {
-        AVPlayer(url: url)
-    }
-    
-    /// Check if a URL is a valid video file
-    /// - Parameter url: The URL to check
-    /// - Returns: Whether the URL points to a valid video file
-    public static func isValidVideoFile(_ url: URL) async -> Bool {
-        let asset = AVURLAsset(url: url)
+        let viewModel = FileProviderViewModel()
         
-        do {
-            // Try to load the tracks
-            let tracks = try await asset.loadTracks(withMediaType: .video)
-            return !tracks.isEmpty
-        } catch {
-            return false
-        }
-    }
-    
-    /// Get video metadata
-    /// - Parameter url: The video URL
-    /// - Returns: A tuple containing title, duration, and dimensions
-    public static func getVideoMetadata(_ url: URL) async -> (title: String?, duration: TimeInterval?, dimensions: CGSize?) {
-        let asset = AVURLAsset(url: url)
-        
-        do {
-            // Get duration
-            let duration = try await asset.load(.duration).seconds
-            
-            // Get title from metadata
-            let metadata = try await asset.load(.commonMetadata)
-            let titleItems = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle)
-            let title = titleItems.first?.stringValue ?? url.deletingPathExtension().lastPathComponent
-            
-            // Get dimensions
-            let tracks = try await asset.loadTracks(withMediaType: .video)
-            var dimensions: CGSize?
-            if let videoTrack = tracks.first {
-                let trackDimensions = try await videoTrack.load(.naturalSize)
-                let trackTransform = try await videoTrack.load(.preferredTransform)
-                dimensions = trackDimensions.applying(trackTransform)
+        if let contentTypes = contentTypes {
+            Task {
+                await viewModel.setContentTypeFilter(contentTypes)
             }
-            
-            return (title, duration, dimensions)
-        } catch {
-            return (url.deletingPathExtension().lastPathComponent, nil, nil)
         }
+        
+        return FileSelectionView(
+            viewModel: viewModel,
+            onSelectFile: onSelectFile,
+            onAddToPlaylist: onAddToPlaylist,
+            allowMultipleSelection: allowMultipleSelection
+        )
     }
     
-    /// Create a thumbnail image for a video
-    /// - Parameters:
-    ///   - url: The video URL
-    ///   - time: The time position for the thumbnail (default: 10% into the video)
-    /// - Returns: A UIImage thumbnail
-    public static func createVideoThumbnail(for url: URL, at time: CMTime? = nil) async -> UIImage? {
-        let asset = AVURLAsset(url: url)
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
+    /// Returns a view for selecting a directory
+    /// - Parameter onSelectDirectory: Callback for when a directory is selected
+    /// - Returns: A view for browsing and selecting directories
+    public static func directorySelectionView(
+        onSelectDirectory: ((FileItem) async -> Void)? = nil
+    ) -> some View {
+        let viewModel = FileProviderViewModel()
+        viewModel.showOnlyFolders = true
         
-        do {
-            // Determine time for thumbnail
-            let thumbnailTime: CMTime
-            if let specifiedTime = time {
-                thumbnailTime = specifiedTime
+        return FileSelectionView(
+            viewModel: viewModel,
+            onSelectFile: onSelectDirectory,
+            showOnlyFolders: true
+        )
+    }
+    
+    /// Returns a view for displaying the file playlist
+    /// - Parameter viewModel: The view model to use
+    /// - Returns: A view for displaying and managing the playlist
+    public static func playlistView(
+        viewModel: FileSelectionViewModel
+    ) -> some View {
+        PlaylistView(viewModel: viewModel)
+    }
+    
+    /// Creates a new file selection view model
+    /// - Returns: A new FileSelectionViewModel instance
+    public static func createFileSelectionViewModel() -> FileSelectionViewModel {
+        FileSelectionViewModel()
+    }
+}
+
+/// A view for displaying and managing the playlist
+public struct PlaylistView: View {
+    @ObservedObject var viewModel: FileSelectionViewModel
+    
+    public var body: some View {
+        List {
+            if viewModel.selectedFiles.isEmpty {
+                ContentUnavailableView {
+                    Label("No Files", systemImage: "play.slash")
+                } description: {
+                    Text("Your playlist is empty. Add files to get started.")
+                } actions: {
+                    NavigationLink(destination: Files.fileSelectionView(
+                        onSelectFile: { file in
+                            viewModel.addToPlaylist(file)
+                        },
+                        onAddToPlaylist: { file in
+                            viewModel.addToPlaylist(file)
+                        },
+                        allowMultipleSelection: true,
+                        contentTypes: viewModel.supportedContentTypes
+                    )) {
+                        Text("Browse Files")
+                    }
+                    .buttonStyle(.bordered)
+                }
             } else {
-                // Default to 10% into the video
-                let duration = try await asset.load(.duration)
-                thumbnailTime = CMTime(seconds: duration.seconds * 0.1, preferredTimescale: 600)
+                ForEach(viewModel.selectedFiles) { file in
+                    HStack {
+                        Image(systemName: file == viewModel.currentPlayingFile ? "play.circle.fill" : "play.circle")
+                            .foregroundColor(file == viewModel.currentPlayingFile ? .accentColor : .secondary)
+                        
+                        VStack(alignment: .leading) {
+                            Text(file.name)
+                                .font(.body)
+                                .lineLimit(1)
+                            
+                            if let size = file.size {
+                                Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            viewModel.removeFromPlaylist(file)
+                        }) {
+                            Image(systemName: "minus.circle")
+                                .foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.setCurrentPlayingFile(file)
+                    }
+                }
+                .onMove { from, to in
+                    if from.count == 1 && to < viewModel.selectedFiles.count {
+                        viewModel.movePlaylistItem(fromIndex: from.first!, toIndex: to)
+                    }
+                }
+                
+                Section {
+                    Button(action: {
+                        viewModel.clearPlaylist()
+                    }) {
+                        HStack {
+                            Spacer()
+                            Text("Clear Playlist")
+                                .foregroundColor(.red)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .navigationTitle("Playlist")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink(destination: Files.fileSelectionView(
+                    onSelectFile: { file in
+                        viewModel.addToPlaylist(file)
+                    },
+                    onAddToPlaylist: { file in
+                        viewModel.addToPlaylist(file)
+                    },
+                    allowMultipleSelection: true,
+                    contentTypes: viewModel.supportedContentTypes
+                )) {
+                    Image(systemName: "plus")
+                }
             }
             
-            let cgImage = try await generator.image(at: thumbnailTime).image
-            return UIImage(cgImage: cgImage)
-        } catch {
-            return nil
+            ToolbarItem(placement: .navigationBarTrailing) {
+                EditButton()
+                    .disabled(viewModel.selectedFiles.isEmpty)
+            }
         }
+    }
+}
+
+#Preview {
+    NavigationStack {
+        Files.playlistView(viewModel: FileSelectionViewModel())
     }
 }
