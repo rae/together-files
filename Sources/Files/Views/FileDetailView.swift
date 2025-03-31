@@ -6,8 +6,10 @@
 //
 
 import SwiftUI
-#if os(tvOS)
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 import AVKit
 
@@ -43,7 +45,7 @@ public struct FileDetailView: View {
                 } else {
                     ZStack {
                         Rectangle()
-                            .fill(Color(FilesColor.secondaryBackground.color))
+                            .fill(FilesColor.secondaryBackground.color)
                             .frame(height: 200)
                             .cornerRadius(12)
                         
@@ -140,14 +142,12 @@ public struct FileDetailView: View {
             }
         }
         .navigationTitle("File Details")
+        #if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .overlay {
             if isLoading {
-                ProgressView()
-                    .scaleEffect(1.5)
-                    .padding()
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemBackground).opacity(0.8)))
-                    .shadow(radius: 10)
+                LoadingOverlayView()
             }
         }
         .alert("Error", isPresented: $showError) {
@@ -175,29 +175,22 @@ public struct FileDetailView: View {
         // Load preview URL for media files
         if file.isVideo || file.isAudio {
             Task {
-                do {
-                    if let url = await fileSelectionViewModel.getLocalURL(for: file) {
-                        // Create a preview player for the file
-                        let player = AVPlayer(url: url)
-                        
-                        // Set the player's volume
-                        player.volume = 0.5
-                        
-                        await MainActor.run {
-                            self.previewURL = url
-                            self.previewPlayer = player
-                            
-                            // Prepare player by preloading a short segment
-                            player.automaticallyWaitsToMinimizeStalling = true
-                            
-                            // Don't autoplay the preview
-                            player.pause()
-                        }
-                    }
-                } catch {
+                if let url = await fileSelectionViewModel.getLocalURL(for: file) {
+                    // Create a preview player for the file
+                    let player = AVPlayer(url: url)
+                    
+                    // Set the player's volume
+                    player.volume = 0.5
+                    
                     await MainActor.run {
-                        errorMessage = "Could not load file preview: \(error.localizedDescription)"
-                        showError = true
+                        self.previewURL = url
+                        self.previewPlayer = player
+                        
+                        // Prepare player by preloading a short segment
+                        player.automaticallyWaitsToMinimizeStalling = true
+                        
+                        // Don't autoplay the preview
+                        player.pause()
                     }
                 }
                 
@@ -210,29 +203,43 @@ public struct FileDetailView: View {
         }
     }
     
-    /// Shares the file
+    /// Shares the file using platform-specific sharing
     private func shareFile() {
-        #if os(tvOS)
-        #else
         Task {
             do {
                 if let url = await fileSelectionViewModel.getLocalURL(for: file) {
-                    // Share the file using UIActivityViewController
-                    let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: [])
-                    
-                    // Present the activity view controller
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let rootVC = windowScene.windows.first?.rootViewController {
-                        rootVC.present(activityVC, animated: true)
-                    }
+                    #if os(iOS)
+                    shareFileiOS(url)
+                    #elseif os(macOS)
+                    shareFileMacOS(url)
+                    #endif
                 } else {
                     errorMessage = "Could not access the file for sharing"
                     showError = true
                 }
             }
         }
-        #endif
     }
+    
+    #if os(iOS)
+    /// Shares the file on iOS using UIActivityViewController
+    private func shareFileiOS(_ url: URL) {
+        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: [])
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            rootVC.present(activityVC, animated: true)
+        }
+    }
+    #elseif os(macOS)
+    /// Shares the file on macOS using NSSharingService
+    private func shareFileMacOS(_ url: URL) {
+        let sharingService = NSSharingServicePicker(items: [url])
+        if let window = NSApp.windows.first {
+            sharingService.show(relativeTo: .zero, of: window.contentView!, preferredEdge: .minY)
+        }
+    }
+    #endif
     
     /// Determines the icon name to use for a file item
     /// - Parameter item: The file item
@@ -252,15 +259,12 @@ public struct FileDetailView: View {
             if contentType.conforms(to: .image) {
                 return "photo.fill"
             }
-            if contentType.conforms(to: .pdf) {
-                return "doc.text.fill"
-            }
         }
         
         return "doc.fill"
     }
     
-    /// Determines the icon color to use for a file item
+    /// Determines the color to use for a file item's icon
     /// - Parameter item: The file item
     /// - Returns: The color to use for the icon
     private func iconColor(for item: FileItem) -> Color {
@@ -270,10 +274,10 @@ public struct FileDetailView: View {
         
         if let contentType = item.contentType {
             if contentType.conforms(to: .movie) || contentType.conforms(to: .video) {
-                return .purple
+                return .red
             }
             if contentType.conforms(to: .audio) {
-                return .pink
+                return .purple
             }
             if contentType.conforms(to: .image) {
                 return .green
@@ -286,21 +290,16 @@ public struct FileDetailView: View {
 
 #Preview {
     NavigationStack {
-        // Create a mock file item for preview
-        let url = URL(fileURLWithPath: "/path/to/movie.mp4")
-        let fileItem = FileItem(
-            id: "123",
-            name: "Sample Movie.mp4",
-            url: url,
-            size: 128_000_000,
-            modificationDate: Date(),
-            creationDate: Date().addingTimeInterval(-86400), // 1 day ago
-            isDirectory: false,
-            contentType: UTType.movie
-        )
-        
         FileDetailView(
-            file: fileItem,
+            file: FileItem(
+                id: "test",
+                name: "Test File",
+                url: URL(string: "file:///test")!,
+                size: 1024,
+                modificationDate: Date(),
+                creationDate: Date(),
+                contentType: .movie
+            ),
             fileSelectionViewModel: FileSelectionViewModel()
         )
     }

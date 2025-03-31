@@ -102,7 +102,7 @@ public struct FilesSettingsView: View {
             if isResettingCache {
                 ProgressView("Clearing cache...")
                     .padding()
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemBackground)))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color(NSColor.windowBackgroundColor)))
                     .shadow(radius: 10)
             }
         }
@@ -149,7 +149,7 @@ public struct FilesSettingsView: View {
             }
             .navigationTitle("Preferred Providers")
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         saveSelectedProviders()
                         showProviderSelection = false

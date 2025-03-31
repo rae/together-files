@@ -67,7 +67,7 @@ public struct FileProviderListView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .listStyle(.insetGrouped)
+                .listStyle(.bordered)
                 .refreshable {
                     await loadProviders()
                 }
@@ -78,13 +78,13 @@ public struct FileProviderListView: View {
                 ProgressView()
                     .scaleEffect(1.5)
                     .padding()
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemBackground).opacity(0.8)))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(FilesColor.background.color.opacity(0.8)))
                     .shadow(radius: 10)
             }
         }
         .navigationTitle("File Providers")
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .automatic) {
                 Button(action: {
                     Task {
                         await loadProviders()

@@ -341,8 +341,6 @@ public class FileSystemService: FileSystemServiceProtocol {
             }
             
             source.resume()
-        } catch {
-            subject.send(completion: .failure(error))
         }
         
         return subject.eraseToAnyPublisher()
